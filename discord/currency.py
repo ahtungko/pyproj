@@ -1,8 +1,11 @@
+# command !myr, !myr100, !myr eur, !myr 100 eur
+
 import os
 import discord
 import requests
 from discord.ext import commands
 from dotenv import load_dotenv
+import re # Import the regular expression module
 
 # --- Configuration ---
 # IMPORTANT: Replace 'YOUR_BOT_TOKEN_HERE' with your actual Discord bot token.
@@ -33,15 +36,17 @@ bot = commands.Bot(command_prefix=PREFIX, intents=intents)
 
 # --- Helper Functions ---
 
+# Amount parameter is no longer passed to the API call.
+# The API will always return rates for 1 unit.
 async def fetch_exchange_rates(base_currency: str, target_currency: str = None):
     """
-    Fetches exchange rates from the Frankfurter API.
+    Fetches exchange rates for 1 unit of the base currency from the Frankfurter API.
     Args:
         base_currency (str): The base currency code (e.g., "USD").
         target_currency (str, optional): The target currency code (e.g., "EUR").
                                          If None, all rates for base_currency are returned.
     Returns:
-        dict: A dictionary containing exchange rate data, or None if an error occurs.
+        dict: A dictionary containing exchange rate data for 1 unit, or None if an error occurs.
     """
     params = {'base': base_currency.upper()}
     if target_currency:
@@ -67,86 +72,148 @@ async def on_ready():
 @bot.event
 async def on_message(message):
     """
-    Handles messages to implement dynamic currency commands (e.g., !usd, !eur jpy).
+    Handles messages to implement dynamic currency commands (e.g., !usd, !eur jpy, !usd100, !usd 100 jpy).
     """
     # Ignore messages from the bot itself
     if message.author == bot.user:
         return
 
-    # Process commands defined with @bot.command() first (e.g., !help)
-    await bot.process_commands(message)
-
-    # Check if the message starts with the prefix and is not a recognized command
+    # Check if the message starts with the prefix
     if message.content.startswith(PREFIX):
-        # Split the message into parts: command and arguments
-        parts = message.content[len(PREFIX):].split()
-        if not parts:
-            return # Empty command after prefix
+        full_command_parts = message.content[len(PREFIX):].strip().split()
+        
+        if not full_command_parts:
+            # If only the prefix was sent (e.g., "!") then process it as a command
+            await bot.process_commands(message)
+            return
 
-        base_currency = parts[0].upper() # The first part is treated as the base currency
+        base_currency = None
+        amount = 1.0 # Default amount, will be updated by user input
         target_currency = None
 
-        if len(parts) > 1:
-            target_currency = parts[1].upper()
+        # --- REFINED PARSING LOGIC ---
+        # This logic handles:
+        # !CURRENCY
+        # !CURRENCYAMOUNT
+        # !CURRENCY TARGET_CURRENCY
+        # !CURRENCYAMOUNT TARGET_CURRENCY
+        # !CURRENCY AMOUNT
+        # !CURRENCY AMOUNT TARGET_CURRENCY
 
-        # Send the initial "please wait" message and store the message object
-        status_message = await message.channel.send(f"Fetching exchange rates for {base_currency}, please wait...")
+        first_arg = full_command_parts[0]
+        
+        # Try to match currency code potentially followed by an amount (e.g., USD100)
+        currency_amount_match = re.match(r'^([A-Z]{2,4})(\d*\.?\d*)?$', first_arg, re.IGNORECASE)
 
-        rates_data = await fetch_exchange_rates(base_currency, target_currency)
+        if currency_amount_match:
+            base_currency = currency_amount_match.group(1).upper()
+            attached_amount_str = currency_amount_match.group(2)
+            if attached_amount_str:
+                try:
+                    amount = float(attached_amount_str)
+                except ValueError:
+                    amount = 1.0 # Fallback if parsing fails
 
-        if rates_data:
-            base = rates_data.get('base')
-            date = rates_data.get('date')
-            rates = rates_data.get('rates')
-
-            if not rates:
-                # This could happen if the base currency itself is not supported
-                await status_message.edit(content=f"No rates found for {base}. Please ensure '{base}' is a valid currency code supported by the Frankfurter API.")
-                return
-
-            response_message = f"**Exchange Rates for 1 {base} (as of {date}):**\n"
-
-            if target_currency:
-                # Specific rate requested
-                rate = rates.get(target_currency)
-                if rate is not None:
-                    response_message += f"**1 {base} = {rate:.4f} {target_currency}**"
-                else:
-                    response_message += f"Could not find rate for {target_currency}. Please ensure '{target_currency}' is a valid currency code."
-            else:
-                # All rates for the base currency
-                rate_lines = []
-                for currency, rate in rates.items():
-                    rate_lines.append(f"  - {currency}: {rate:.4f}")
+            # Check for subsequent arguments
+            if len(full_command_parts) > 1:
+                second_arg = full_command_parts[1]
                 
-                # Discord message length limit is 2000 characters.
-                # If the list is too long, split it into multiple messages.
-                if len("\n".join(rate_lines)) + len(response_message) > 1900:
-                    # If the message is too long, we still need to send subsequent parts
-                    # as new messages, but the initial status_message will be updated
-                    # with the first part.
-                    await status_message.edit(content=response_message) # Update initial message with header
-                    current_message_part = ""
-                    for line in rate_lines:
-                        if len(current_message_part) + len(line) + 1 > 1900:
-                            await message.channel.send(f"```\n{current_message_part}\n```")
-                            current_message_part = line
-                        else:
-                            current_message_part += "\n" + line
-                    if current_message_part:
-                        await message.channel.send(f"```\n{current_message_part}\n```")
-                    return # Exit after sending multiple messages
+                # If the second argument is a number, it's an explicit amount
+                if re.match(r'^\d+(\.\d+)?$', second_arg):
+                    try:
+                        amount = float(second_arg) # Override attached amount if explicit amount is given
+                        # If there's a third argument, it's the target currency
+                        if len(full_command_parts) > 2:
+                            target_currency = full_command_parts[2].upper()
+                    except ValueError:
+                        pass # Ignore if not a valid number
                 else:
-                    response_message += "```\n" + "\n".join(rate_lines) + "\n```"
-            
-            # Edit the original status message with the final response
-            await status_message.edit(content=response_message)
+                    # If second argument is not a number, it's the target currency
+                    target_currency = second_arg.upper()
         else:
-            # If fetching rates failed, edit the status message to reflect the error
-            await status_message.edit(content="Sorry, I couldn't fetch the exchange rates at this moment. Please try again later.")
-        # No need for explicit 'command not found' for currency codes, as they are now
-        # directly passed to the API. The API's response (or lack thereof) will dictate
-        # the error message.
+            # If the first argument is just a currency code (e.g., !USD)
+            base_currency = first_arg.upper()
+            if len(full_command_parts) > 1:
+                second_arg = full_command_parts[1]
+                # Check if the second argument is a number (e.g., !USD 100)
+                if re.match(r'^\d+(\.\d+)?$', second_arg):
+                    try:
+                        amount = float(second_arg)
+                        if len(full_command_parts) > 2:
+                            target_currency = full_command_parts[2].upper()
+                    except ValueError:
+                        pass
+                else:
+                    # If second argument is not a number, it's the target currency (e.g., !USD MYR)
+                    target_currency = second_arg.upper()
+
+        # --- END REFINED PARSING LOGIC ---
+        
+        # If a base currency was successfully parsed, handle the currency command
+        if base_currency:
+            # Send the initial "please wait" message and store the message object
+            status_message = await message.channel.send(f"Fetching exchange rates for {base_currency} (amount: {amount:.2f}), please wait...")
+
+            # Call fetch_exchange_rates without the 'amount' parameter, as we do the multiplication locally
+            # Pass the target_currency to the API if it was provided, to potentially optimize the API response
+            rates_data = await fetch_exchange_rates(base_currency, target_currency)
+
+            if rates_data:
+                base = rates_data.get('base')
+                date = rates_data.get('date')
+                rates = rates_data.get('rates')
+
+                if not rates:
+                    # This could happen if the base currency itself is not supported
+                    await status_message.edit(content=f"No rates found for {base}. Please ensure '{base}' is a valid currency code supported by the Frankfurter API.")
+                    return
+
+                # Display the result using the user's input amount
+                response_message = f"**Exchange Rates for {amount:.2f} {base} (as of {date}):**\n"
+
+                if target_currency:
+                    # Specific rate requested, so only show that one
+                    rate_for_one = rates.get(target_currency)
+                    if rate_for_one is not None:
+                        calculated_rate = rate_for_one * amount # Perform multiplication here
+                        response_message += f"**{amount:.2f} {base} = {calculated_rate:.4f} {target_currency}**"
+                    else:
+                        response_message += f"Could not find rate for {target_currency}. Please ensure '{target_currency}' is a valid currency code."
+                else:
+                    # No specific target currency, list all available rates multiplied by the amount
+                    rate_lines = []
+                    for currency, rate_for_one in rates.items():
+                        calculated_rate = rate_for_one * amount # Perform multiplication here
+                        rate_lines.append(f"  - {currency}: {calculated_rate:.4f}")
+                    
+                    # Discord message length limit is 2000 characters.
+                    # If the list is too long, split it into multiple messages.
+                    if len("\n".join(rate_lines)) + len(response_message) > 1900:
+                        await status_message.edit(content=response_message) # Update initial message with header
+                        current_message_part = ""
+                        for line in rate_lines:
+                            if len(current_message_part) + len(line) + 1 > 1900:
+                                await message.channel.send(f"```\n{current_message_part}\n```")
+                                current_message_part = line
+                            else:
+                                current_message_part += "\n" + line
+                        if current_message_part:
+                            await message.channel.send(f"```\n{current_message_part}\n```")
+                        return # Exit after sending multiple messages
+                    else:
+                        response_message += "```\n" + "\n".join(rate_lines) + "\n```"
+                
+                # Edit the original status message with the final response
+                await status_message.edit(content=response_message)
+            else:
+                # If fetching rates failed, edit the status message to reflect the error
+                await status_message.edit(content="Sorry, I couldn't fetch the exchange rates at this moment. Please try again later.")
+            return # Important: Return after handling a currency command
+        
+    # If the message did not start with the prefix, or if it started with the prefix
+    # but was not a recognized currency command, then process it as a regular bot command.
+    await bot.process_commands(message)
+
 
 # --- Run the Bot ---
 if __name__ == '__main__':
@@ -161,3 +228,4 @@ if __name__ == '__main__':
             print("ERROR: Invalid Discord bot token. Please check your token.")
         except Exception as e:
             print(f"An unexpected error occurred: {e}")
+
