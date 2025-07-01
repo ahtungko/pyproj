@@ -295,7 +295,7 @@ async def help_command(ctx):
         inline=False
     )
     
-    embed.set_footer(text="Replace 'usd', 'myr', and '100' with your desired currencies and amounts.")
+    embed.set_footer(text="Author: Jenny")
     
     await ctx.send(embed=embed)
 
