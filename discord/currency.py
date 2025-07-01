@@ -32,7 +32,8 @@ intents.message_content = True # Required to read message content for commands
 intents.guilds = True # Required to interact with guilds (servers)
 
 # Initialize the bot with a command prefix and intents
-bot = commands.Bot(command_prefix=PREFIX, intents=intents)
+# IMPORTANT: Set help_command=None to disable the default help command
+bot = commands.Bot(command_prefix=PREFIX, intents=intents, help_command=None)
 
 # --- Helper Functions ---
 
@@ -78,14 +79,22 @@ async def on_message(message):
     if message.author == bot.user:
         return
 
-    # Check if the message starts with the prefix
+    # Create a context for the message. This allows discord.py to parse the command.
+    ctx = await bot.get_context(message)
+
+    # If a valid command was found and processed by discord.ext.commands,
+    # then we stop processing this message here. This ensures !help works.
+    if ctx.valid:
+        await bot.process_commands(message)
+        return
+
+    # If no valid command was found by discord.ext.commands,
+    # then we proceed with our custom currency parsing logic.
     if message.content.startswith(PREFIX):
         full_command_parts = message.content[len(PREFIX):].strip().split()
         
         if not full_command_parts:
-            # If only the prefix was sent (e.g., "!") then process it as a command
-            await bot.process_commands(message)
-            return
+            return # Empty command after prefix
 
         base_currency = None
         amount = 1.0 # Default amount, will be updated by user input
@@ -211,8 +220,33 @@ async def on_message(message):
             return # Important: Return after handling a currency command
         
     # If the message did not start with the prefix, or if it started with the prefix
-    # but was not a recognized currency command, then process it as a regular bot command.
-    await bot.process_commands(message)
+    # but was not a recognized currency command, then this block will not be reached.
+
+
+# --- Discord Bot Commands ---
+
+@bot.command(name='help', help='Shows how to use the currency exchange commands.')
+async def help_command(ctx):
+    """
+    Displays information about how to use the currency exchange commands.
+    """
+    help_message = (
+        "**Currency Exchange Bot Commands:**\n"
+        "Use the following formats to get exchange rates:\n\n"
+        f"**1. Get all rates for a base currency (for 1 unit):**\n"
+        f"   `{PREFIX}CURRENCY` (e.g., `{PREFIX}usd`)\n\n"
+        f"**2. Get all rates for a specific amount of base currency:**\n"
+        f"   `{PREFIX}CURRENCY<AMOUNT>` (e.g., `{PREFIX}usd100`)\n"
+        f"   `{PREFIX}CURRENCY <AMOUNT>` (e.g., `{PREFIX}usd 100`)\n\n"
+        f"**3. Get a specific conversion (for 1 unit):**\n"
+        f"   `{PREFIX}CURRENCY <TARGET_CURRENCY>` (e.g., `{PREFIX}usd myr`)\n\n"
+        f"**4. Get a specific conversion for a specific amount:**\n"
+        f"   `{PREFIX}CURRENCY<AMOUNT> <TARGET_CURRENCY>` (e.g., `{PREFIX}usd100 myr`)\n"
+        f"   `{PREFIX}CURRENCY <AMOUNT> <TARGET_CURRENCY>` (e.g., `{PREFIX}usd 100 myr`)\n\n"
+        "**Note:** Replace `CURRENCY` with a 3-letter currency code (e.g., USD, EUR, MYR).\n"
+        "Replace `AMOUNT` with the number you want to convert."
+    )
+    await ctx.send(help_message)
 
 
 # --- Run the Bot ---
@@ -228,4 +262,3 @@ if __name__ == '__main__':
             print("ERROR: Invalid Discord bot token. Please check your token.")
         except Exception as e:
             print(f"An unexpected error occurred: {e}")
-
