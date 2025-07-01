@@ -89,7 +89,8 @@ async def on_message(message):
         if len(parts) > 1:
             target_currency = parts[1].upper()
 
-        await message.channel.send(f"Fetching exchange rates for {base_currency}, please wait...")
+        # Send the initial "please wait" message and store the message object
+        status_message = await message.channel.send(f"Fetching exchange rates for {base_currency}, please wait...")
 
         rates_data = await fetch_exchange_rates(base_currency, target_currency)
 
@@ -100,7 +101,7 @@ async def on_message(message):
 
             if not rates:
                 # This could happen if the base currency itself is not supported
-                await message.channel.send(f"No rates found for {base}. Please ensure '{base}' is a valid currency code supported by the Frankfurter API.")
+                await status_message.edit(content=f"No rates found for {base}. Please ensure '{base}' is a valid currency code supported by the Frankfurter API.")
                 return
 
             response_message = f"**Exchange Rates for 1 {base} (as of {date}):**\n"
@@ -121,7 +122,10 @@ async def on_message(message):
                 # Discord message length limit is 2000 characters.
                 # If the list is too long, split it into multiple messages.
                 if len("\n".join(rate_lines)) + len(response_message) > 1900:
-                    await message.channel.send(response_message) # Send the header
+                    # If the message is too long, we still need to send subsequent parts
+                    # as new messages, but the initial status_message will be updated
+                    # with the first part.
+                    await status_message.edit(content=response_message) # Update initial message with header
                     current_message_part = ""
                     for line in rate_lines:
                         if len(current_message_part) + len(line) + 1 > 1900:
@@ -131,11 +135,15 @@ async def on_message(message):
                             current_message_part += "\n" + line
                     if current_message_part:
                         await message.channel.send(f"```\n{current_message_part}\n```")
+                    return # Exit after sending multiple messages
                 else:
                     response_message += "```\n" + "\n".join(rate_lines) + "\n```"
-            await message.channel.send(response_message)
+            
+            # Edit the original status message with the final response
+            await status_message.edit(content=response_message)
         else:
-            await message.channel.send("Sorry, I couldn't fetch the exchange rates at this moment. Please try again later.")
+            # If fetching rates failed, edit the status message to reflect the error
+            await status_message.edit(content="Sorry, I couldn't fetch the exchange rates at this moment. Please try again later.")
         # No need for explicit 'command not found' for currency codes, as they are now
         # directly passed to the API. The API's response (or lack thereof) will dictate
         # the error message.
