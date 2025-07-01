@@ -3,3 +3,9 @@
 discord.py
 python-dotenv
 google-generativeai
+
+#For combinedversion.py
+#discord.py
+#requests
+# google-generativeai
+# python-dotenv
