@@ -1,0 +1,5 @@
+#For gemini.py
+
+discord.py
+python-dotenv
+google-generativeai
