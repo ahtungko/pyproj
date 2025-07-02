@@ -9,3 +9,5 @@ google-generativeai
 #requests
 # google-generativeai
 # python-dotenv
+#for new
+#matplotlib
