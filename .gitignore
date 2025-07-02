@@ -1,3 +1,4 @@
 discord/.env
 .venv
 discord/venv
+discord/abc.txt

@@ -1,5 +1,6 @@
+# --- MERGED AND USABLE DISCORD BOT ---
 # This script combines the functionality of an AI/Currency bot and a Horoscope bot.
-# VERSION 4: Renamed !del to !remove to avoid Python keyword conflict.
+# FINAL VERSION
 
 # --- Consolidated Imports ---
 import os
@@ -123,12 +124,18 @@ class ZodiacSelectionView(ui.View):
 
 # --- Horoscope Bot: Automated Daily Task ---
 
+# Define the time for the task to run.
+# The user requested 8:00 AM in their local time (Malaysia, UTC+8).
+# The tasks.loop function uses UTC time. 8:00 AM MYT is 00:00 UTC.
 run_time = datetime.time(hour=0, minute=0, tzinfo=datetime.timezone.utc)
 
 @tasks.loop(time=run_time)
 async def send_daily_horoscopes():
-    """ A background task that sends daily horoscopes to all registered users. """
-    print(f"[{datetime.datetime.now()}] Running daily horoscope task...")
+    """
+    A background task that sends daily horoscopes to all registered users.
+    This is scheduled to run at 8:00 AM Malaysia Time (00:00 UTC) every day.
+    """
+    print(f"[{datetime.datetime.now()}] Running daily horoscope task for 8:00 AM MYT...")
     users = load_user_data()
     if not users:
         print("No registered users to send horoscopes to.")
@@ -207,19 +214,23 @@ async def fetch_and_send_horoscope(destination, sign, user: discord.User = None)
                 color=discord.Color.purple()
             )
             embed.set_footer(text=f"Date: {data.get('date')}")
-            await destination.send(embed=embed)
+            # For DMs, the destination object can send directly.
+            if isinstance(destination, (discord.User, discord.Member)):
+                 await destination.send(embed=embed)
+            else: # For channels, use the original destination.send
+                 await destination.send(embed=embed)
             return True
         else:
             await destination.send("Sorry, I couldn't retrieve the horoscope right now. Please try again later.")
             return False
     except requests.exceptions.RequestException as e:
         print(f"API Request failed for sign {sign}: {e}")
-        if isinstance(destination, (commands.Context, discord.TextChannel, discord.Interaction)):
+        if isinstance(destination, (commands.Context, discord.TextChannel, discord.Interaction, discord.User, discord.Member)):
             await destination.send("Sorry, there was an error connecting to the horoscope service.")
         return False
     except Exception as e:
         print(f"An unexpected error occurred for sign {sign}: {e}")
-        if isinstance(destination, (commands.Context, discord.TextChannel, discord.Interaction)):
+        if isinstance(destination, (commands.Context, discord.TextChannel, discord.Interaction, discord.User, discord.Member)):
             await destination.send("An unexpected error occurred. Please try again.")
         return False
 
@@ -442,7 +453,6 @@ async def mod(ctx: commands.Context):
     view = ZodiacSelectionView(author=ctx.author)
     await ctx.send(f"{ctx.author.mention}, please select your new zodiac sign from the menu below:", view=view)
 
-# CORRECTED: Renamed command from 'del' to 'remove' to avoid keyword conflict.
 @bot.command(name='remove')
 async def remove_record(ctx: commands.Context):
     """ Deletes the user's saved zodiac sign from the record. """
@@ -456,13 +466,28 @@ async def remove_record(ctx: commands.Context):
     else:
         await ctx.send(f"You do not have a registered sign to delete, {ctx.author.mention}. Use `{COMMAND_PREFIX}reg` to get started.")
 
-
 @bot.command(name='test')
 @commands.is_owner()
 async def test_daily_horoscopes(ctx):
-    """ Manually triggers the daily horoscope task (Bot Owner Only). """
-    await ctx.send("✅ Manually triggering the daily horoscope task. Check your DMs and the console for output.")
-    await send_daily_horoscopes()
+    """
+    Manually triggers a private test of the horoscope function for the bot owner.
+    This will only send a horoscope to the owner, not all registered users.
+    """
+    # 1. Acknowledge the command in the channel discreetly
+    await ctx.message.add_reaction('🧪')
+
+    owner_id = str(ctx.author.id)
+    users = load_user_data()
+
+    # 2. Check if the owner is registered for horoscopes
+    if owner_id in users:
+        sign = users[owner_id]
+        # 3. Send a private confirmation and run the test only for the owner
+        await ctx.author.send(f"✅ Running a personal test for your sign: **{sign}**. You should receive your horoscope message next.")
+        await fetch_and_send_horoscope(ctx.author, sign, user=ctx.author)
+    else:
+        # 4. Handle the case where the owner hasn't registered yet
+        await ctx.author.send(f"⚠️ You are not registered for horoscopes. Please use `{COMMAND_PREFIX}reg` first to test this feature.")
 
 
 # --- Main Execution Block ---
