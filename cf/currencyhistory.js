@@ -1,9 +1,9 @@
 /**
- * Cloudflare Worker to fetch the last 7 days of currency exchange rates.
+ * Cloudflare Worker to fetch the last 30 days of currency exchange rates.
  *
  * This worker responds to any incoming request by fetching historical data
  * from the Frankfurter API (https://api.frankfurter.dev). It automatically
- * calculates a time-aware date range to ensure 7 full days of data are returned,
+ * calculates a time-aware date range to ensure 30 full days of data are returned,
  * accounting for the daily update time of the source API.
  */
 export default {
@@ -52,10 +52,10 @@ export default {
       }
       // If it's after the update time, we can safely use today's date as the end date.
 
-      // The start date is 7 days before our calculated, time-aware end date.
-      // We subtract 6 to make the range inclusive of 7 days.
+      // The start date is 30 days before our calculated, time-aware end date.
+      // We subtract 29 to make the range inclusive of 30 days.
       const startDate = new Date(endDate);
-      startDate.setDate(startDate.getDate() - 6);
+      startDate.setDate(startDate.getDate() - 29);
 
       const formattedStartDate = formatDate(startDate);
       const formattedEndDate = formatDate(endDate);
