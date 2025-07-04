@@ -21,7 +21,7 @@
 # Added owner-only !olist command to list registered users.
 # Added !liverate command using Wise Sandbox API with dynamic timestamps.
 # Fixed all bugs in !liverate command (timestamp rendering, argument parsing).
-
+# !dict [word] command for English word definitions and audio pronunciations.
 # --- Consolidated Imports ---
 import os
 import discord
@@ -37,6 +37,7 @@ from datetime import timezone, timedelta
 from discord import ui
 from discord.ext import commands, tasks
 from dotenv import load_dotenv
+import io
 
 # --- Unified Configuration & Environment Loading ---
 load_dotenv()
@@ -470,7 +471,7 @@ async def on_ready():
     "IMPORTANT: You MUST detect the language of the user's message and ALWAYS respond in that same language. "
     "For example, if the user writes in Chinese, you must reply in Chinese. If they write in Malay, you reply in Malay."
     )
-    
+
     if GEMINI_API_KEY:
         try:
             model = genai.GenerativeModel(model_name=DEFAULT_MODEL, system_instruction=ai_personality)
@@ -516,6 +517,8 @@ async def help_command(ctx):
     embed.add_field(name=f"✨ Daily Horoscope (Prefix: `{COMMAND_PREFIX}`)", value=(f"**Register:** `{COMMAND_PREFIX}reg`\n" f"**Modify Sign:** `{COMMAND_PREFIX}mod`\n" f"**Modify Timezone:** `{COMMAND_PREFIX}modtz`\n" f"**Remove your record:** `{COMMAND_PREFIX}remove`\n" f"**Show in channel:** `{COMMAND_PREFIX}list`\n\n" f"Receive a daily horoscope in your timezone!"), inline=False)
     embed.add_field(name=f"🐱 Fun Commands (Prefix: `{COMMAND_PREFIX}`)", value=(f"**Cat Picture:** `{COMMAND_PREFIX}c`\n" f"**Cat Fact:** `{COMMAND_PREFIX}cf`"), inline=False)
     embed.add_field(name=f"🎮 Game Deals (Prefix: `{COMMAND_PREFIX}`)", value=(f"**Top Steam Deals:** `{COMMAND_PREFIX}deals`\n" f"**Check Game Price:** `{COMMAND_PREFIX}price [game name]`"), inline=False)
+    embed.add_field(name=f"📚 Utility Commands (Prefix: `{COMMAND_PREFIX}`)", value=(f"**Dictionary:** `{COMMAND_PREFIX}dict [word]`"), inline=False)
+    
     if ctx.author.id == bot.owner_id:
         embed.add_field(name=f"👑 Owner Commands", value=f"**List all horoscope users:** `{COMMAND_PREFIX}olist`\n**Test your horoscope DM:** `{COMMAND_PREFIX}test`", inline=False)
     embed.set_footer(text="Made with ❤️ by Jenny")
@@ -649,6 +652,90 @@ async def price(ctx: commands.Context, *, game_name: str = None):
                 embed.add_field(name="Current Price", value=f"**${game_info.get('cheapest', 'N/A')}**", inline=False)
                 await ctx.send(embed=embed)
     except Exception as e: print(f"Error in !price command: {e}"); await ctx.send("Sorry, an unexpected error stopped me from checking the price. 😿")
+
+@bot.command(name='dict')
+async def dict_command(ctx: commands.Context, *, word: str = None):
+    """Provides definitions for a given word and attaches the pronunciation audio file."""
+    if not word:
+        await ctx.send("Please provide a word to look up. Usage: `!dict [word]`")
+        return
+
+    API_URL = f"https://api.dictionaryapi.dev/api/v2/entries/en/{word}"
+    
+    async with ctx.typing():
+        try:
+            response = requests.get(API_URL)
+            response.raise_for_status() 
+            data = response.json()
+
+            if isinstance(data, dict) and data.get("title") == "No Definitions Found":
+                await ctx.send(f"Sorry, I couldn't find a definition for **'{word}'**. Please check the spelling.")
+                return
+
+            word_data = data[0]
+            word_text = word_data.get('word', 'N/A')
+            
+            # --- [CHANGED] Create embed with new title format and no URL ---
+            embed = discord.Embed(
+                title=f"**{word_text.title()}**",
+                color=discord.Color.light_grey()
+            )
+
+            # --- Find Phonetics and Audio URL ---
+            phonetic_text = None
+            audio_url = None
+            if 'phonetics' in word_data and word_data['phonetics']:
+                for p in word_data['phonetics']:
+                    if p.get('text'):
+                        phonetic_text = p.get('text')
+                        break
+                for p in word_data['phonetics']:
+                    if p.get('audio'):
+                        audio_url = p.get('audio')
+                        break
+            
+            if phonetic_text:
+                embed.description = f"**Phonetic:** `{phonetic_text}`"
+
+            # --- Add Meanings ---
+            if 'meanings' in word_data:
+                for meaning in word_data['meanings']:
+                    part_of_speech = meaning.get('partOfSpeech', 'N/A').title()
+                    definitions = []
+                    for i, definition_info in enumerate(meaning.get('definitions', [])):
+                        if i < 3:
+                            definition_text = definition_info.get('definition', 'No definition available.')
+                            definitions.append(f"**{i+1}.** {definition_text}")
+                    
+                    if definitions:
+                        embed.add_field(name=f"As a {part_of_speech}", value="\n".join(definitions), inline=False)
+
+            # --- [REMOVED] No footer is needed ---
+            
+            # --- Download Audio and Prepare File ---
+            audio_file = None
+            if audio_url:
+                try:
+                    audio_response = requests.get(audio_url)
+                    audio_response.raise_for_status()
+                    
+                    if 'audio' in audio_response.headers.get('Content-Type', ''):
+                        audio_data = io.BytesIO(audio_response.content)
+                        audio_file = discord.File(fp=audio_data, filename=f"{word_text}_pronunciation.mp3")
+                except Exception as e:
+                    print(f"Failed to download audio file: {e}")
+
+            # --- [FINAL] Send the embed and file together in one message ---
+            await ctx.send(embed=embed, file=audio_file)
+
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code == 404:
+                await ctx.send(f"Sorry, I couldn't find a definition for **'{word}'**. Please check the spelling.")
+            else:
+                await ctx.send(f"An HTTP error occurred: {e}")
+        except Exception as e:
+            print(f"Error in !dict command: {e}")
+            await ctx.send("An unexpected error occurred while looking up the word. 😿")
 
 @bot.command(name='liverate')
 async def liverate(ctx: commands.Context, *args):
