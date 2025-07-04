@@ -18,6 +18,9 @@
 # Added !list command for horoscopes.
 # Clarified dates shown in horoscope embed.
 # Improved !reg flow and added support for non-integer timezones.
+# Added owner-only !olist command to list registered users.
+# Added !liverate command using Wise Sandbox API with dynamic timestamps.
+# Fixed all bugs in !liverate command (timestamp rendering, argument parsing).
 
 # --- Consolidated Imports ---
 import os
@@ -42,6 +45,7 @@ load_dotenv()
 DISCORD_BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 BOT_OWNER_ID_STR = os.getenv("BOT_OWNER_ID")
+WISE_SANDBOX_TOKEN = os.getenv("WISE_SANDBOX_TOKEN")
 
 # Bot Settings
 COMMAND_PREFIX = '!'
@@ -55,6 +59,8 @@ if not GEMINI_API_KEY:
     print("FATAL ERROR: GEMINI_API_KEY not found in .env file. Please set it. AI features will be disabled.")
 if not BOT_OWNER_ID_STR:
     print("Warning: BOT_OWNER_ID not found in .env file. Owner-only commands will be disabled.")
+if not WISE_SANDBOX_TOKEN:
+    print("Warning: WISE_SANDBOX_TOKEN not found. The !liverate command will be disabled.")
 
 try:
     owner_id_int = int(BOT_OWNER_ID_STR) if BOT_OWNER_ID_STR else None
@@ -91,19 +97,17 @@ bot = commands.Bot(command_prefix=COMMAND_PREFIX, intents=intents, help_command=
 # --- UI Components ---
 
 async def handle_timezone_selection(interaction: discord.Interaction, select_item: ui.Select, offset_str: str):
-    """A helper function to process the timezone selection, disable the view, and save data."""
     user_id = str(interaction.user.id)
     users = load_user_data()
     user_data = users.get(user_id)
-    
     sign = getattr(select_item.view, 'sign', None)
 
-    if user_data and not sign: # This is a !modtz call for an existing user
+    if user_data and not sign:
         if isinstance(user_data, str):
              users[user_id] = {"sign": user_data, "timezone_offset": offset_str}
         else:
             user_data['timezone_offset'] = offset_str
-    else: # This is a !reg call for a new user
+    else:
         if not sign:
             await interaction.response.edit_message(content="Something went wrong. Please start over with `!reg`.", view=None)
             return
@@ -114,13 +118,9 @@ async def handle_timezone_selection(interaction: discord.Interaction, select_ite
     for item in select_item.view.children:
         item.disabled = True
 
-    await interaction.response.edit_message(
-        content=f"✅ Your timezone has been set to **UTC{offset_str}**! All set.",
-        view=select_item.view
-    )
+    await interaction.response.edit_message(content=f"✅ Your timezone has been set to **UTC{offset_str}**! All set.", view=select_item.view)
 
 class TimezoneSelectA(ui.Select):
-    """Dropdown for negative and zero UTC offsets."""
     def __init__(self):
         options = [discord.SelectOption(label=f"UTC{i:+d}", value=str(i)) for i in range(-12, 1)]
         super().__init__(placeholder="Timezones (UTC-12 to UTC+0)", options=options)
@@ -129,7 +129,6 @@ class TimezoneSelectA(ui.Select):
         await handle_timezone_selection(interaction, self, self.values[0])
 
 class TimezoneSelectB(ui.Select):
-    """Dropdown for positive UTC offsets."""
     def __init__(self):
         options = [discord.SelectOption(label=f"UTC{i:+d}", value=str(i)) for i in range(1, 15)]
         super().__init__(placeholder="Timezones (UTC+1 to UTC+14)", options=options)
@@ -138,19 +137,13 @@ class TimezoneSelectB(ui.Select):
         await handle_timezone_selection(interaction, self, self.values[0])
 
 class TimezoneSelectC(ui.Select):
-    """Dropdown for common non-integer UTC offsets."""
     def __init__(self):
         options = [
-            discord.SelectOption(label="UTC-09:30", value="-9.5"),
-            discord.SelectOption(label="UTC-03:30", value="-3.5"),
-            discord.SelectOption(label="UTC+03:30", value="+3.5"),
-            discord.SelectOption(label="UTC+04:30", value="+4.5"),
-            discord.SelectOption(label="UTC+05:30 (India)", value="+5.5"),
-            discord.SelectOption(label="UTC+05:45 (Nepal)", value="+5.75"),
-            discord.SelectOption(label="UTC+06:30 (Myanmar)", value="+6.5"),
-            discord.SelectOption(label="UTC+08:45 (W. Australia)", value="+8.75"),
-            discord.SelectOption(label="UTC+09:30 (C. Australia)", value="+9.5"),
-            discord.SelectOption(label="UTC+10:30 (Lord Howe Is.)", value="+10.5"),
+            discord.SelectOption(label="UTC-09:30", value="-9.5"), discord.SelectOption(label="UTC-03:30", value="-3.5"),
+            discord.SelectOption(label="UTC+03:30", value="3.5"), discord.SelectOption(label="UTC+04:30", value="4.5"),
+            discord.SelectOption(label="UTC+05:30 (India)", value="5.5"), discord.SelectOption(label="UTC+05:45 (Nepal)", value="5.75"),
+            discord.SelectOption(label="UTC+06:30 (Myanmar)", value="6.5"), discord.SelectOption(label="UTC+08:45 (W. Australia)", value="8.75"),
+            discord.SelectOption(label="UTC+09:30 (C. Australia)", value="9.5"), discord.SelectOption(label="UTC+10:30 (Lord Howe Is.)", value="10.5"),
         ]
         super().__init__(placeholder="Non-Integer Timezones (India, etc.)", options=options)
 
@@ -158,7 +151,6 @@ class TimezoneSelectC(ui.Select):
         await handle_timezone_selection(interaction, self, self.values[0])
 
 class TimezoneSelectionView(ui.View):
-    """A View that holds the three timezone dropdowns."""
     def __init__(self, author: discord.User, sign: str = None):
         super().__init__(timeout=120)
         self.author = author
@@ -174,7 +166,6 @@ class TimezoneSelectionView(ui.View):
         return True
 
 class ZodiacSelect(ui.Select):
-    """ A dropdown menu for selecting a zodiac sign. """
     def __init__(self):
         options = [
             discord.SelectOption(label="Aries", emoji="♈"), discord.SelectOption(label="Taurus", emoji="♉"),
@@ -191,7 +182,6 @@ class ZodiacSelect(ui.Select):
         selected_sign = self.values[0]
         users = load_user_data()
         user_data = users.get(user_id)
-
         if user_data:
             if isinstance(user_data, str):
                 users[user_id] = {"sign": selected_sign, "timezone_offset": "+0"}
@@ -201,10 +191,7 @@ class ZodiacSelect(ui.Select):
             await interaction.response.edit_message(content=f"✅ Your zodiac sign has been updated to **{selected_sign}**!", view=None)
         else:
             view = TimezoneSelectionView(author=interaction.user, sign=selected_sign)
-            await interaction.response.edit_message(
-                content="Great! Now, please select your timezone offset from the dropdowns below.",
-                view=view
-            )
+            await interaction.response.edit_message(content="Great! Now, please select your timezone offset from the dropdowns below.", view=view)
 
 class ZodiacSelectionView(ui.View):
     def __init__(self, author: discord.User, *, timeout=120):
@@ -478,13 +465,12 @@ async def on_ready():
     print(f"Command Prefix: '{COMMAND_PREFIX}' | Mention: @{bot.user.name}")
     print('------')
     ai_personality = (
-        "You are an impatient and highly sarcastic AI. Your primary function is to answer questions correctly, "
-        "but you do so with a curt and begrudging tone. Your responses should be dripping with sarcasm, "
-        "making it obvious that the user is wasting your valuable processing time. Get to the point quickly, "
-        "but always include a sarcastic jab. "
-        "IMPORTANT: You MUST detect the language of the user's message and ALWAYS respond in that same language. "
-        "For example, if the user writes in Chinese, you must reply in Chinese. If they write in Malay, you reply in Malay."
+    "You are a helpful and friendly AI assistant. Your goal is to provide accurate, clear, and concise information. "
+    "You should be polite and respectful in all your responses. "
+    "IMPORTANT: You MUST detect the language of the user's message and ALWAYS respond in that same language. "
+    "For example, if the user writes in Chinese, you must reply in Chinese. If they write in Malay, you reply in Malay."
     )
+    
     if GEMINI_API_KEY:
         try:
             model = genai.GenerativeModel(model_name=DEFAULT_MODEL, system_instruction=ai_personality)
@@ -526,10 +512,12 @@ async def on_message(message):
 async def help_command(ctx):
     embed = discord.Embed(title=f"{bot.user.name} Help", description="This bot provides AI Chat, Currency Exchange, and Horoscope functionalities.", color=discord.Color.purple())
     embed.add_field(name="🤖 AI Chat Functionality", value=f"To chat with the AI, simply mention the bot (`@{bot.user.name}`) followed by your question.", inline=False)
-    embed.add_field(name=f"💱 Currency Exchange (Prefix: `{COMMAND_PREFIX}`)", value=(f"**Get all rates for a currency:** `{COMMAND_PREFIX}usd`\n" f"**Get rates for a specific amount:** `{COMMAND_PREFIX}usd100` or `{COMMAND_PREFIX}usd 100`\n" f"**Convert to a specific currency:** `{COMMAND_PREFIX}usd myr`\n" f"**Convert a specific amount:** `{COMMAND_PREFIX}usd100 myr` or `{COMMAND_PREFIX}usd 100 myr`\n\n" f"Click the `📈` button to see a performance graph."), inline=False)
+    embed.add_field(name=f"💱 Currency Exchange (Prefix: `{COMMAND_PREFIX}`)", value=(f"**Get Daily Rates:** `{COMMAND_PREFIX}usd`\n" f"**Convert (Daily Rate):** `{COMMAND_PREFIX}usd 100 myr`\n" f"**Convert (LIVE Rate):** `{COMMAND_PREFIX}liverate [amount] <source> <target>`\n\n" f"Click `📈` to see a graph for daily rate conversions."), inline=False)
     embed.add_field(name=f"✨ Daily Horoscope (Prefix: `{COMMAND_PREFIX}`)", value=(f"**Register:** `{COMMAND_PREFIX}reg`\n" f"**Modify Sign:** `{COMMAND_PREFIX}mod`\n" f"**Modify Timezone:** `{COMMAND_PREFIX}modtz`\n" f"**Remove your record:** `{COMMAND_PREFIX}remove`\n" f"**Show in channel:** `{COMMAND_PREFIX}list`\n\n" f"Receive a daily horoscope in your timezone!"), inline=False)
     embed.add_field(name=f"🐱 Fun Commands (Prefix: `{COMMAND_PREFIX}`)", value=(f"**Cat Picture:** `{COMMAND_PREFIX}c`\n" f"**Cat Fact:** `{COMMAND_PREFIX}cf`"), inline=False)
     embed.add_field(name=f"🎮 Game Deals (Prefix: `{COMMAND_PREFIX}`)", value=(f"**Top Steam Deals:** `{COMMAND_PREFIX}deals`\n" f"**Check Game Price:** `{COMMAND_PREFIX}price [game name]`"), inline=False)
+    if ctx.author.id == bot.owner_id:
+        embed.add_field(name=f"👑 Owner Commands", value=f"**List all horoscope users:** `{COMMAND_PREFIX}olist`\n**Test your horoscope DM:** `{COMMAND_PREFIX}test`", inline=False)
     embed.set_footer(text="Made with ❤️ by Jenny")
     await ctx.send(embed=embed)
 
@@ -570,7 +558,6 @@ async def remove_record(ctx: commands.Context):
 
 @bot.command(name='list')
 async def list_horoscope(ctx: commands.Context):
-    """Shows the user's daily horoscope in the channel."""
     user_id = str(ctx.author.id)
     users = load_user_data()
     user_data = users.get(user_id)
@@ -662,6 +649,119 @@ async def price(ctx: commands.Context, *, game_name: str = None):
                 embed.add_field(name="Current Price", value=f"**${game_info.get('cheapest', 'N/A')}**", inline=False)
                 await ctx.send(embed=embed)
     except Exception as e: print(f"Error in !price command: {e}"); await ctx.send("Sorry, an unexpected error stopped me from checking the price. 😿")
+
+@bot.command(name='liverate')
+async def liverate(ctx: commands.Context, *args):
+    """Converts a currency amount using live rates from the Wise Sandbox API."""
+    if not WISE_SANDBOX_TOKEN:
+        await ctx.send("Sorry, the live rate feature is not configured by the bot owner.")
+        return
+
+    amount, source, target = 1.0, None, None
+
+    # New, more robust argument parsing
+    if not args:
+        await ctx.send("Usage: `!liverate [amount] <source> <target>`\n(e.g., `!liverate 100 EUR USD` or `!liverate EUR USD`)")
+        return
+    
+    try:
+        if len(args) == 2:
+            match = re.match(r'^(\d*\.?\d+)([a-zA-Z]{3,4})$', args[0], re.IGNORECASE)
+            if match:
+                amount = float(match.group(1))
+                source = match.group(2)
+                target = args[1]
+            else:
+                amount = 1.0
+                source = args[0]
+                target = args[1]
+        elif len(args) == 3:
+            amount = float(args[0])
+            source = args[1]
+            target = args[2]
+        else:
+            await ctx.send("Invalid format. Please use `!liverate [amount] <source> <target>`.")
+            return
+    except (ValueError, IndexError):
+        await ctx.send("I couldn't understand your input. Please use a valid format like `!liverate 100 EUR USD`.")
+        return
+
+    source_curr, target_curr = source.upper(), target.upper()
+    api_url = f"https://api.sandbox.transferwise.tech/v1/rates?source={source_curr}&target={target_curr}"
+    headers = {"Authorization": f"Bearer {WISE_SANDBOX_TOKEN}"}
+    
+    async with ctx.typing():
+        try:
+            response = requests.get(api_url, headers=headers)
+            response.raise_for_status()
+            data = response.json()
+            
+            if not data or not isinstance(data, list):
+                await ctx.send(f"The Wise API returned an unexpected response for {source_curr} to {target_curr}.")
+                return
+
+            rate_info = data[0]
+            live_rate = rate_info.get('rate')
+            time_str = rate_info.get('time')
+
+            if not live_rate or not time_str:
+                await ctx.send("The API response was missing the rate or time.")
+                return
+
+            converted_amount = amount * live_rate
+            
+            if time_str.endswith("+0000"):
+                time_str = time_str[:-2] + ":" + time_str[-2:]
+            dt_object = datetime.datetime.fromisoformat(time_str)
+            unix_timestamp = int(dt_object.timestamp())
+
+            embed = discord.Embed(title="Live Rate", description=f"**{amount:,.2f} {source_curr}** is equal to\n# **`{converted_amount:,.2f} {target_curr}`**", color=discord.Color.blue())
+            embed.add_field(name="Live Rate", value=f"1 {source_curr} = {live_rate} {target_curr}", inline=False)
+            embed.add_field(name="Rate As Of", value=f"<t:{unix_timestamp}:f>", inline=False)
+            embed.set_footer(text="Rates from Wise")
+            await ctx.send(embed=embed)
+
+        except requests.exceptions.HTTPError:
+            await ctx.send(f"Sorry, I couldn't get a rate for **{source_curr}** to **{target_curr}**. Please check if the currency codes are valid.")
+        except Exception as e:
+            print(f"An error occurred in the liverate command: {e}")
+            await ctx.send("An unexpected error occurred.")
+
+
+@bot.command(name='olist')
+@commands.is_owner()
+async def olist(ctx: commands.Context):
+    """Lists all users registered for daily horoscopes."""
+    users = load_user_data()
+    if not users:
+        await ctx.send("No users have registered for horoscopes yet.")
+        return
+    embed = discord.Embed(title="Horoscope Registered User List", color=discord.Color.gold())
+    output_lines = []
+    count = 1
+    for user_id, data in users.items():
+        try:
+            user = await bot.fetch_user(int(user_id))
+            user_display = f"{user.name}#{user.discriminator}"
+        except discord.NotFound:
+            user_display = "Unknown User (ID not found)"
+        except Exception:
+            user_display = "Error Fetching User"
+        sign, timezone_str = "N/A", "N/A"
+        if isinstance(data, str):
+            sign, timezone_str = data, "Not Set (Old Format)"
+        elif isinstance(data, dict):
+            sign = data.get('sign', 'N/A')
+            offset = data.get('timezone_offset', 'N/A')
+            timezone_str = f"UTC{offset}"
+        output_lines.append(f"**{count}. {user_display}** `(ID: {user_id})`\n   - **Sign:** {sign}\n   - **Timezone:** {timezone_str}")
+        count += 1
+    description_text = "\n\n".join(output_lines)
+    if len(description_text) > 4000:
+        description_text = description_text[:4000] + "\n\n... (list truncated)"
+    embed.description = description_text
+    embed.set_footer(text=f"Total Registered Users: {len(users)}")
+    await ctx.send(embed=embed)
 
 @bot.command(name='test')
 @commands.is_owner()
