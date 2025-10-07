@@ -1,8 +1,8 @@
 #For gemini.py
 
-discord.py
-python-dotenv
-google-generativeai
+# discord.py
+# python-dotenv
+# google-generativeai
 
 #For combinedversion.py
 #discord.py
@@ -11,3 +11,8 @@ google-generativeai
 # python-dotenv
 #for new
 #matplotlib
+
+#v12
+discord.py
+requests
+python-dotenv
